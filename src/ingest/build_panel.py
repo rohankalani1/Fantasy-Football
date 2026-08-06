@@ -17,7 +17,7 @@ import os
 
 import polars as pl
 
-from src.ingest.constants import PROCESSED_DIR, RESULTS_DIR, POSITIONS, SEASONS
+from src.ingest.constants import PROCESSED_DIR, RESULTS_DIR, POSITIONS, SEASONS, season_length_expr
 from src.ingest.id_matching import build_name_index, match_adp_to_gsis
 from src.ingest.pull_raw import (
     pull_ff_playerids,
@@ -325,7 +325,7 @@ def build_panel(refresh: bool = False) -> pl.DataFrame:
     # pipeline). A single-season regular-season schedule is 16 games through 2020 and
     # 17 from 2021 on; clip both games_played and games_active to that ceiling so one
     # upstream data glitch can't silently corrupt the Step 6 availability model.
-    max_games = pl.when(pl.col("season") >= 2021).then(17).otherwise(16)
+    max_games = season_length_expr()
     over_cap = panel.filter(
         (pl.col("games_played") > max_games) | (pl.col("games_active") > max_games)
     )

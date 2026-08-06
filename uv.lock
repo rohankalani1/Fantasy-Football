@@ -99,6 +99,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "scikit-learn" },
+    { name = "scipy" },
 ]
 
 [package.metadata]
@@ -113,6 +114,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "scikit-learn", specifier = ">=1.9.0" },
+    { name = "scipy", specifier = ">=1.18.0" },
 ]
 
 [[package]]

@@ -17,3 +17,13 @@ POSITIONS = ["QB", "RB", "WR", "TE"]
 RAW_DIR = "data/raw"
 PROCESSED_DIR = "data/processed"
 RESULTS_DIR = "results"
+
+
+def season_length_expr(season_col: str = "season"):
+    """Regular-season game count: 17 from 2021 on (the league expanded that year), 16
+    before. Same rule build_panel.py already uses to clip games_played/games_active;
+    pulled out here so Step 6's beta-binomial availability model (which needs it as the
+    Binomial's n) doesn't silently duplicate-and-drift from that definition."""
+    import polars as pl
+
+    return pl.when(pl.col(season_col) >= 2021).then(17).otherwise(16)
