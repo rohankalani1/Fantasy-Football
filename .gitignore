@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.claude/settings.local.json
+
+# Raw and processed data are fully reproducible from src/ingest -- regenerate with
+# `uv run python -m src.ingest.build_panel`, don't commit the cache.
+data/raw/
+data/processed/

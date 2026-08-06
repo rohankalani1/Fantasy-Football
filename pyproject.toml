@@ -1,0 +1,21 @@
+[project]
+name = "fantasy-football-model"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Rohan Kalani", email = "rohan2003k@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "duckdb>=1.5.5",
+    "lightgbm>=4.7.0",
+    "nflreadpy>=0.1.5",
+    "numpy>=2.5.1",
+    "polars>=1.43.2",
+    "requests>=2.34.2",
+    "scikit-learn>=1.9.0",
+]
+
+[tool.uv]
+package = false
