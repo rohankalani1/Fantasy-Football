@@ -1,30 +1,32 @@
 {
   "target_share": {
     "best_params": {
-      "max_depth": 4,
-      "reg_lambda": 5.0
+      "max_depth": 3,
+      "reg_lambda": 20.0
     },
-    "best_iteration": 143,
-    "tune_mae": 0.031204199850051982,
-    "test_mae": 0.03058839293561824,
+    "best_iteration": 230,
+    "tune_mae": 0.03132069836050512,
+    "test_mae": 0.03091272544744295,
     "naive_carryforward_test_mae": 0.035292134031116126,
     "n_train_tune": 4196,
     "n_test": 463,
     "feature_importance": {
-      "ewma_target_share": 306,
-      "ewma_rush_share": 109,
-      "games_played_t1": 36,
-      "games_played_t2": 69,
-      "snap_share_t1": 156,
-      "vacated_target_share": 136,
-      "vacated_rush_share": 71,
-      "draft_round": 13,
-      "draft_pick": 180,
-      "years_exp": 44,
-      "age": 232,
-      "team_change_flag": 94,
-      "position": 53,
-      "team_pass_rate_projected": 126
+      "ewma_target_share": 287,
+      "ewma_rush_share": 90,
+      "ewma_passer_share": 51,
+      "games_played_t1": 17,
+      "games_played_t2": 63,
+      "snap_share_t1": 131,
+      "vacated_target_share": 108,
+      "vacated_rush_share": 36,
+      "vacated_passer_share": 13,
+      "draft_round": 9,
+      "draft_pick": 164,
+      "years_exp": 28,
+      "age": 208,
+      "team_change_flag": 65,
+      "position": 42,
+      "team_pass_rate_projected": 68
     }
   },
   "rush_share": {
@@ -32,27 +34,59 @@
       "max_depth": 4,
       "reg_lambda": 20.0
     },
-    "best_iteration": 178,
-    "tune_mae": 0.035372087041340566,
-    "test_mae": 0.03738626838420929,
+    "best_iteration": 170,
+    "tune_mae": 0.03566124487805077,
+    "test_mae": 0.03730315716966748,
     "naive_carryforward_test_mae": 0.04029640750617417,
     "n_train_tune": 4108,
     "n_test": 452,
     "feature_importance": {
-      "ewma_target_share": 79,
-      "ewma_rush_share": 453,
-      "games_played_t1": 25,
-      "games_played_t2": 21,
-      "snap_share_t1": 131,
-      "vacated_target_share": 67,
-      "vacated_rush_share": 271,
-      "draft_round": 18,
-      "draft_pick": 285,
-      "years_exp": 69,
-      "age": 215,
-      "team_change_flag": 73,
-      "position": 103,
-      "team_pass_rate_projected": 112
+      "ewma_target_share": 73,
+      "ewma_rush_share": 431,
+      "ewma_passer_share": 2,
+      "games_played_t1": 23,
+      "games_played_t2": 19,
+      "snap_share_t1": 134,
+      "vacated_target_share": 58,
+      "vacated_rush_share": 251,
+      "vacated_passer_share": 14,
+      "draft_round": 15,
+      "draft_pick": 260,
+      "years_exp": 66,
+      "age": 212,
+      "team_change_flag": 72,
+      "position": 95,
+      "team_pass_rate_projected": 96
+    }
+  },
+  "passer_share": {
+    "best_params": {
+      "max_depth": 4,
+      "reg_lambda": 5.0
+    },
+    "best_iteration": 142,
+    "tune_mae": 0.1844604915166741,
+    "test_mae": 0.18378748162148287,
+    "naive_carryforward_test_mae": 0.17497273789969373,
+    "n_train_tune": 894,
+    "n_test": 98,
+    "feature_importance": {
+      "ewma_target_share": 34,
+      "ewma_rush_share": 127,
+      "ewma_passer_share": 171,
+      "games_played_t1": 28,
+      "games_played_t2": 54,
+      "snap_share_t1": 85,
+      "vacated_target_share": 16,
+      "vacated_rush_share": 53,
+      "vacated_passer_share": 157,
+      "draft_round": 8,
+      "draft_pick": 181,
+      "years_exp": 49,
+      "age": 173,
+      "team_change_flag": 43,
+      "position": 0,
+      "team_pass_rate_projected": 93
     }
   }
 }

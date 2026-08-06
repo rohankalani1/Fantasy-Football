@@ -8,6 +8,12 @@ RB+QB+WR together, with position as a categorical feature in each -- this pools 
 data per model than four fully separate per-position models would, which matters given
 CLAUDE.md's small-N warning.
 
+A third model, passer_share (QB only), was added in Step 7 -- passing volume wasn't
+part of the original Step 4 design, an architecture gap only visible once Step 7 tried
+to combine everything into points. Single-position by necessity (only QBs throw
+passes in this project's scope), but built with the exact same feature set and fitting
+procedure as the other two.
+
 Every feature is knowable as of Aug 1 of the season being predicted: EWMA prior shares,
 games played, snap share, and vacated share all come from season t and t-1 (completed
 seasons); draft capital/years_exp/age/position are static facts about the player
@@ -39,11 +45,13 @@ from src.models.team_volume import fit_team_volume_model, project_historical
 FEATURE_COLS = [
     "ewma_target_share",
     "ewma_rush_share",
+    "ewma_passer_share",
     "games_played_t1",
     "games_played_t2",
     "snap_share_t1",
     "vacated_target_share",
     "vacated_rush_share",
+    "vacated_passer_share",
     "draft_round",
     "draft_pick",
     "years_exp",
@@ -56,6 +64,7 @@ CATEGORICAL_FEATURES = ["position"]
 
 TARGET_SHARE_POSITIONS = ["WR", "RB", "TE"]
 RUSH_SHARE_POSITIONS = ["RB", "QB", "WR"]
+PASSER_SHARE_POSITIONS = ["QB"]
 
 TRAIN_MAX_SEASON = 2022
 TUNE_SEASONS = [2023, 2024]
@@ -114,7 +123,7 @@ def assemble_usage_training_table(panel: pl.DataFrame, refresh: bool = False) ->
     )
 
     out = base.join(
-        shares.select("gsis_id", "season", "target_share", "rush_share"),
+        shares.select("gsis_id", "season", "target_share", "rush_share", "passer_share"),
         on=["gsis_id", "season"], how="left",
     )
     out = out.join(ewma, on=["gsis_id", "season"], how="left")
@@ -132,16 +141,19 @@ def assemble_usage_training_table(panel: pl.DataFrame, refresh: bool = False) ->
         .alias("team_change_flag"),
         pl.col("ewma_target_share").fill_null(0.0),
         pl.col("ewma_rush_share").fill_null(0.0),
+        pl.col("ewma_passer_share").fill_null(0.0),
         # ewma's own fill_null only covers rows that exist in its output; joining it
         # onto this wider (every QB/RB/WR/TE row) population reintroduces nulls for
         # rows absent from ewma entirely, so these need filling again here too.
         pl.col("target_share_t1").fill_null(0.0),
         pl.col("rush_share_t1").fill_null(0.0),
+        pl.col("passer_share_t1").fill_null(0.0),
         pl.col("games_played_t1").fill_null(0),
         pl.col("games_played_t2").fill_null(0),
         pl.col("snap_share_t1").fill_null(0.0),
         pl.col("vacated_target_share").fill_null(0.0),
         pl.col("vacated_rush_share").fill_null(0.0),
+        pl.col("vacated_passer_share").fill_null(0.0),
     )
     return out.filter(pl.col("season").is_in(SEASONS)).sort(["season", "team", "position"])
 
@@ -208,7 +220,7 @@ def _fit_one_share_model(table: pl.DataFrame, target: str, positions: list[str])
     # "dumb baseline" discipline as Step 2, applied locally to this component. The
     # EWMA feature itself is already a 2:1 t1/t2 blend, so the naive reference point
     # uses the raw single-season t1 column instead, not the (smarter) EWMA feature.
-    prior_col = "target_share_t1" if target == "target_share" else "rush_share_t1"
+    prior_col = f"{target}_t1"
     naive_pred = test.select(prior_col).to_numpy().ravel()
     naive_mae = float(np.mean(np.abs(naive_pred - y_test)))
 
@@ -227,6 +239,43 @@ def _fit_one_share_model(table: pl.DataFrame, target: str, positions: list[str])
     return results, final_model
 
 
+_MODEL_POSITIONS = {
+    "target_share": TARGET_SHARE_POSITIONS,
+    "rush_share": RUSH_SHARE_POSITIONS,
+    "passer_share": PASSER_SHARE_POSITIONS,
+}
+
+
+def predict_shares(table: pl.DataFrame, models: dict) -> pl.DataFrame:
+    """Applies each fitted share model to every row of `table` it applies to (rows
+    outside that model's position group, or with a null required feature, get 0 --
+    e.g. a TE's rush_share_pred is 0 because TEs essentially never rush, not because
+    the model failed). Used by Step 7's combine to turn share models into projected
+    raw counting stats for every player-season at once.
+
+    Clipped to [0, 1]: LightGBM is an unconstrained regressor, and for deep-bench
+    players near 0 it can (and does -- verified directly: 117 rows with a negative
+    target_share_pred, 536 with negative rush_share_pred) predict a small negative
+    share as ordinary regression noise. A negative share means negative projected
+    targets/carries downstream in Step 7's combine, which can produce a negative
+    total-season point projection for a real (if irrelevant) player -- nonsensical,
+    not a modeling nuance worth preserving.
+    """
+    out = table.select("gsis_id", "season", "position")
+    for target, positions in _MODEL_POSITIONS.items():
+        eligible = table.filter(pl.col("position").is_in(positions)).drop_nulls(
+            [c for c in FEATURE_COLS if c != "position"]
+        )
+        X = _to_lgb_frame(eligible)
+        raw_pred = np.clip(models[target].predict(X), 0.0, 1.0)
+        pred = eligible.select("gsis_id", "season").with_columns(
+            pl.Series(f"{target}_pred", raw_pred)
+        )
+        out = out.join(pred, on=["gsis_id", "season"], how="left")
+        out = out.with_columns(pl.col(f"{target}_pred").fill_null(0.0))
+    return out
+
+
 def main(refresh: bool = False) -> dict:
     panel = pl.read_parquet(os.path.join(PROCESSED_DIR, "player_season_panel.parquet"))
     table = assemble_usage_training_table(panel, refresh)
@@ -236,6 +285,7 @@ def main(refresh: bool = False) -> dict:
     for target, positions in [
         ("target_share", TARGET_SHARE_POSITIONS),
         ("rush_share", RUSH_SHARE_POSITIONS),
+        ("passer_share", PASSER_SHARE_POSITIONS),
     ]:
         r, model = _fit_one_share_model(table, target, positions)
         results[target] = r

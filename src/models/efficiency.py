@@ -1,7 +1,14 @@
 """Step 5 of PLAN.md: efficiency model. Empirical Bayes shrinkage of each player's
-career rate toward a position-and-role mean, for 4 rate stats: yards per target (ypt),
-touchdown rate on targets (td_rate_receiving), yards per carry (ypc), touchdown rate on
-carries (td_rate_rushing).
+career rate toward a position-and-role mean, for 8 rate stats: yards per target (ypt),
+touchdown rate on targets (td_rate_receiving), catch rate (receptions/target), yards
+per carry (ypc), touchdown rate on carries (td_rate_rushing), and three QB passing
+stats added in Step 7 (yards/attempt, passing TD rate, INT rate) -- passing production
+wasn't part of the original Steps 4-5 design, a gap only visible once Step 7 tried to
+combine everything into actual fantasy points.
+
+"Position-and-role mean" = the shrinkage prior is fit separately per (position, stat)
+group -- a WR's rushing YPC (jet sweeps) is a different population from a workhorse
+RB's, so they get different priors, not one pooled rushing mean.
 
 "Position-and-role mean" = the shrinkage prior is fit separately per (position, stat)
 group -- a WR's rushing YPC (jet sweeps) is a different population from a workhorse
@@ -33,8 +40,12 @@ from src.ingest.constants import PROCESSED_DIR, RESULTS_DIR, SEASONS
 STAT_POSITIONS = {
     "ypt": ["WR", "RB", "TE"],
     "td_rate_receiving": ["WR", "RB", "TE"],
+    "catch_rate": ["WR", "RB", "TE"],
     "ypc": ["RB", "QB", "WR"],
     "td_rate_rushing": ["RB", "QB", "WR"],
+    "ypa": ["QB"],
+    "pass_td_rate": ["QB"],
+    "int_rate": ["QB"],
 }
 
 TRAIN_MAX_SEASON = 2022
@@ -208,8 +219,9 @@ def score_shrinkage(panel: pl.DataFrame, predictions: pl.DataFrame) -> dict:
     meaningful evaluation point (this project's zero-opportunity-rostered-players rule
     is about not filtering the *panel*, not about pretending an undefined rate is 0)."""
     actual = build_season_rates(panel)
+    opp_cols = sorted({opp_col for opp_col, _ in RATE_STATS.values()})
     joined = predictions.join(
-        actual.select("gsis_id", "season", "targets", "carries", *RATE_STATS.keys()),
+        actual.select("gsis_id", "season", *opp_cols, *RATE_STATS.keys()),
         on=["gsis_id", "season"], how="inner",
     )
     results = {}
