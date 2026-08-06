@@ -112,6 +112,19 @@ def pull_ff_playerids(refresh: bool = False) -> pl.DataFrame:
     )
 
 
+def pull_ff_rankings(refresh: bool = False) -> pl.DataFrame:
+    """Full historical archive of FantasyPros Expert Consensus Rankings (ECR), scraped
+    weekly since 2019 and exposed by nflreadpy/ffverse. Used as the source for Step 2's
+    baseline_consensus -- pick the snapshot closest before Aug 1 of the target season to
+    keep it leakage-safe. Large (~1.8M rows across all ranking types/dates); cached like
+    everything else so this only hits the network once."""
+    return _cached_pull(
+        "ff_rankings_all.parquet",
+        lambda: nfl.load_ff_rankings("all"),
+        refresh,
+    )
+
+
 def pull_all(refresh: bool = False) -> None:
     pull_player_stats(refresh)
     pull_rosters(refresh)
@@ -121,6 +134,7 @@ def pull_all(refresh: bool = False) -> None:
     pull_players_master(refresh)
     pull_ff_playerids(refresh)
     pull_schedules(refresh)
+    pull_ff_rankings(refresh)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,27 @@
+# League scoring rules. Every point value used anywhere in this project must be read
+# from here, never hardcoded -- see CLAUDE.md's "Keep league scoring rules as
+# configuration" rule. Standard full-PPR defaults (ESPN/Yahoo/Sleeper convention),
+# confirmed with the league owner 2026-08-06. Update this file, not the code, if the
+# real league's settings differ once the actual league is set up.
+
+passing:
+  yards_per_point: 25        # 0.04 pt/yard
+  td: 4
+  interception: -2
+
+rushing:
+  yards_per_point: 10        # 0.1 pt/yard
+  td: 6
+
+receiving:
+  yards_per_point: 10        # 0.1 pt/yard
+  td: 6
+  reception: 1.0              # full PPR
+
+fumbles:
+  lost: -2
+
+two_point_conversion: 2
+
+# No yardage-milestone bonuses (100/200/300/400-yard bonuses) in this league.
+bonuses: {}

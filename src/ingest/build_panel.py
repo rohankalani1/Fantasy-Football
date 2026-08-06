@@ -140,6 +140,14 @@ def build_stats(player_stats: pl.DataFrame) -> pl.DataFrame:
         "receiving_tds",
         "fantasy_points",
         "fantasy_points_ppr",
+        # Needed for src/scoring.py's config-driven points calculation (Step 2) --
+        # nflreadpy's own fantasy_points_ppr bakes in its own scoring assumptions,
+        # which is exactly what CLAUDE.md's "never hardcode league scoring" rule
+        # exists to avoid relying on.
+        "fumbles_lost_total",
+        "passing_2pt_conversions",
+        "rushing_2pt_conversions",
+        "receiving_2pt_conversions",
     ]
     # Defensive: a player could in principle have more than one reg-season row for a
     # season (e.g. a mid-season position change); sum stats and take the first team.
@@ -147,6 +155,13 @@ def build_stats(player_stats: pl.DataFrame) -> pl.DataFrame:
         [pl.col(c).sum().alias(c) for c in stat_cols]
         + [pl.col("recent_team").first().alias("recent_team")]
     )
+    stats = stats.with_columns(
+        (
+            pl.col("passing_2pt_conversions")
+            + pl.col("rushing_2pt_conversions")
+            + pl.col("receiving_2pt_conversions")
+        ).alias("two_pt_conversions")
+    ).drop(["passing_2pt_conversions", "rushing_2pt_conversions", "receiving_2pt_conversions"])
 
     return stats.rename(
         {
@@ -155,6 +170,7 @@ def build_stats(player_stats: pl.DataFrame) -> pl.DataFrame:
             "completions": "pass_completions",
             "attempts": "pass_attempts",
             "passing_interceptions": "pass_interceptions",
+            "fumbles_lost_total": "fumbles_lost",
         }
     ).with_columns(canonicalize_team(pl.col("recent_team")))
 
@@ -296,6 +312,8 @@ def build_panel(refresh: bool = False) -> pl.DataFrame:
         "receiving_tds",
         "fantasy_points",
         "fantasy_points_ppr",
+        "fumbles_lost",
+        "two_pt_conversions",
         "season_offense_snaps",
         "games_active",
     ]
