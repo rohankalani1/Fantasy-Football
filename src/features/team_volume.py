@@ -36,7 +36,7 @@ def build_pace(pbp: pl.DataFrame) -> pl.DataFrame:
     )
     return per_team_season.with_columns(
         (pl.col("offensive_plays") / pl.col("games")).alias("pace")
-    ).select("team", "season", "pace", "games")
+    ).select("team", "season", "pace", "games", "offensive_plays")
 
 
 def build_proe(pbp: pl.DataFrame) -> pl.DataFrame:

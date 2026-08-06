@@ -127,11 +127,31 @@ def fit_team_volume_model(table: pl.DataFrame) -> tuple[dict, dict]:
     return results, models
 
 
-def project_season(
+def project_historical(table: pl.DataFrame, models: dict) -> pl.DataFrame:
+    """Applies the fitted models to every (team, season) row in the already-assembled
+    training table, including seasons the models themselves were trained/tuned on.
+
+    This exists for Step 4's "projected team pass rate from Step 3" feature: using the
+    *realized* pass_rate for historical seasons instead of what this model would have
+    projected is a real leakage violation (the realized value isn't knowable as of Aug 1
+    -- only a projection is), and it would also create a train/inference mismatch (clean
+    ground truth at Step 4 training time, a noisy model prediction at Step 4 inference
+    time). Every historical row gets the same kind of feature 2026 will get: this
+    model's own output, not the answer key."""
+    complete = table.drop_nulls(FEATURE_COLS)
+    X = complete.select(FEATURE_COLS).to_numpy()
+    complete = complete.with_columns(
+        pl.Series("team_plays_pred", models["team_plays"].predict(X)),
+        pl.Series("pass_rate_pred", models["pass_rate"].predict(X)),
+    )
+    return complete.select("team", "season", "team_plays_pred", "pass_rate_pred")
+
+
+def project_future_season(
     models: dict[str, Ridge], season: int, inputs_path: str = CURRENT_SEASON_INPUTS_PATH
 ) -> pl.DataFrame:
-    """Projects team_plays/pass_rate for `season` using season-1 and season-2 pace/PROE
-    (already realized, from `table`) plus manually supplied hc_change_flag and
+    """Projects team_plays/pass_rate for a not-yet-played `season` using season-1 and
+    season-2 pace/PROE (already realized) plus manually supplied hc_change_flag and
     vegas_win_total for `season` itself (config/current_season_inputs.csv) -- neither is
     derivable from historical data since `season` hasn't been played yet. Rows for teams
     with a blank input are left with a null projection, not silently guessed."""
@@ -152,7 +172,7 @@ def project_season(
     incomplete = proj.filter(~pl.col("team").is_in(complete.select("team").to_series().to_list()))
     if incomplete.height > 0:
         print(
-            f"[project_season] {incomplete.height} team(s) missing hc_change_flag/"
+            f"[project_future_season] {incomplete.height} team(s) missing hc_change_flag/"
             f"vegas_win_total in {inputs_path} -- left unprojected: "
             f"{incomplete.select('team').to_series().to_list()}"
         )
@@ -184,7 +204,7 @@ def main(refresh: bool = False) -> dict:
         json.dump(results, f, indent=2)
     print(f"Wrote {RESULTS_DIR}/team_volume_scores.json")
 
-    projection = project_season(models, PROJECTION_SEASON)
+    projection = project_future_season(models, PROJECTION_SEASON)
     projection.write_csv(os.path.join(RESULTS_DIR, f"team_volume_projection_{PROJECTION_SEASON}.csv"))
     print(f"Wrote {RESULTS_DIR}/team_volume_projection_{PROJECTION_SEASON}.csv")
 
