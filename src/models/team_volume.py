@@ -149,7 +149,7 @@ def project_season(
     proj = proj.join(current_inputs, on="team", how="left")
 
     complete = proj.drop_nulls(FEATURE_COLS)
-    incomplete = proj.filter(~pl.col("team").is_in(complete.select("team").to_series()))
+    incomplete = proj.filter(~pl.col("team").is_in(complete.select("team").to_series().to_list()))
     if incomplete.height > 0:
         print(
             f"[project_season] {incomplete.height} team(s) missing hc_change_flag/"
