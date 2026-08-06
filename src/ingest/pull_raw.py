@@ -112,6 +112,19 @@ def pull_ff_playerids(refresh: bool = False) -> pl.DataFrame:
     )
 
 
+def pull_pbp(refresh: bool = False) -> pl.DataFrame:
+    """Play-by-play data for every season. Needed for Step 3's team volume projection:
+    nflfastR's own expected-pass model output (xpass/pass_oe columns) for pass-rate-
+    over-expected, offensive play counts for pace, and home_coach/away_coach for the
+    head-coach-change flag. Large (~370 columns, tens of thousands of rows per season)
+    but cached like everything else -- one network pull, not one per season per run."""
+    return _cached_pull(
+        "pbp.parquet",
+        lambda: nfl.load_pbp(SEASONS),
+        refresh,
+    )
+
+
 def pull_ff_rankings(refresh: bool = False) -> pl.DataFrame:
     """Full historical archive of FantasyPros Expert Consensus Rankings (ECR), scraped
     weekly since 2019 and exposed by nflreadpy/ffverse. Used as the source for Step 2's
@@ -135,6 +148,7 @@ def pull_all(refresh: bool = False) -> None:
     pull_ff_playerids(refresh)
     pull_schedules(refresh)
     pull_ff_rankings(refresh)
+    pull_pbp(refresh)
 
 
 if __name__ == "__main__":

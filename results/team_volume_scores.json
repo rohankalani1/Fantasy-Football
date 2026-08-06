@@ -1,0 +1,36 @@
+{
+  "team_plays": {
+    "best_alpha": 10000.0,
+    "tune_mae": 40.14174644054719,
+    "test_mae": 42.09196484871634,
+    "naive_mean_baseline_test_mae": 42.15664184952979,
+    "n_train_tune": 319,
+    "n_test": 32,
+    "standardized_coefficients": {
+      "pace_t1": 0.32922480394428566,
+      "pace_t2": 0.1838524793933892,
+      "proe_t1": 0.010138687858560076,
+      "proe_t2": 0.07140528598202274,
+      "hc_change_flag": -0.09347502783685417,
+      "vegas_win_total": 0.4806603092596168
+    },
+    "intercept": 1038.9968652037617
+  },
+  "pass_rate": {
+    "best_alpha": 300.0,
+    "tune_mae": 0.03336989312707543,
+    "test_mae": 0.03314744885823428,
+    "naive_mean_baseline_test_mae": 0.03563097523325395,
+    "n_train_tune": 319,
+    "n_test": 32,
+    "standardized_coefficients": {
+      "pace_t1": 0.0005775874847139887,
+      "pace_t2": -0.0008985958328408471,
+      "proe_t1": 0.0069105564118385875,
+      "proe_t2": 0.004807493467428717,
+      "hc_change_flag": 0.0007647436685974742,
+      "vegas_win_total": -0.0016805247895697502
+    },
+    "intercept": 0.5803468395195231
+  }
+}
