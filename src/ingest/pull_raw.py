@@ -48,6 +48,19 @@ def pull_rosters(refresh: bool = False) -> pl.DataFrame:
     )
 
 
+def pull_rosters_for_season(season: int, refresh: bool = False) -> pl.DataFrame:
+    """Roster snapshot for a single season outside the fixed historical SEASONS window --
+    used for live current-season projections (e.g. 2026), which by definition isn't part
+    of the frozen historical panel. Cached separately per season (rosters_{season}.parquet)
+    so a live pull for the current season never touches or invalidates the historical
+    rosters_season.parquet cache."""
+    return _cached_pull(
+        f"rosters_{season}.parquet",
+        lambda: nfl.load_rosters([season]),
+        refresh,
+    )
+
+
 def pull_rosters_weekly(refresh: bool = False) -> pl.DataFrame:
     """Weekly roster status (ACT/RES/PUP/etc.), used to compute games_active."""
     return _cached_pull(

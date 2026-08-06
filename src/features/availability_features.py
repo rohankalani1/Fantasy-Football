@@ -63,6 +63,10 @@ def build_availability_features(panel: pl.DataFrame) -> pl.DataFrame:
     out = panel.select("gsis_id", "season", "position", "age")
     out = out.join(gm1, on=["gsis_id", "season"], how="left")
     out = out.join(gm2, on=["gsis_id", "season"], how="left")
+    return _fill_availability_feature_nulls(out)
+
+
+def _fill_availability_feature_nulls(out: pl.DataFrame) -> pl.DataFrame:
     return out.with_columns(
         # games_missed_t1/t2 default to 0 as a neutral "no known injury history" model
         # input (Steps 4-5's rookie-defaults precedent). games_played_t1 separately
@@ -73,3 +77,29 @@ def build_availability_features(panel: pl.DataFrame) -> pl.DataFrame:
         pl.col("games_missed_t2").fill_null(0),
         pl.col("games_played_t1").fill_null(0),
     )
+
+
+def build_future_availability_features(
+    panel: pl.DataFrame, future_population: pl.DataFrame
+) -> pl.DataFrame:
+    """Same columns as build_availability_features, for a live not-yet-played season's
+    roster population instead of panel's own rows. games_missed_t1/t2 still come from
+    panel (the player's real, already-completed 2025/2024 seasons); age/position come
+    from the live population, since a not-yet-played season has no panel row of its own
+    to source them from."""
+    filled = _fill_within_career_gaps(panel)
+    games = filled.with_columns(
+        (season_length_expr() - pl.col("games_played")).alias("games_missed")
+    ).select("gsis_id", "season", "games_missed", "games_played")
+
+    gm1 = games.with_columns((pl.col("season") + 1).alias("season")).rename(
+        {"games_missed": "games_missed_t1", "games_played": "games_played_t1"}
+    )
+    gm2 = games.with_columns((pl.col("season") + 2).alias("season")).rename(
+        {"games_missed": "games_missed_t2"}
+    ).drop("games_played")
+
+    out = future_population.select("gsis_id", "season", "position", "age")
+    out = out.join(gm1, on=["gsis_id", "season"], how="left")
+    out = out.join(gm2, on=["gsis_id", "season"], how="left")
+    return _fill_availability_feature_nulls(out)

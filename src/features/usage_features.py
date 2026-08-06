@@ -119,6 +119,27 @@ def build_vacated_share(shares: pl.DataFrame) -> pl.DataFrame:
     return vacated.with_columns((pl.col("season") + 1).alias("season"))
 
 
+def build_future_vacated_share(
+    shares: pl.DataFrame, future_population: pl.DataFrame, departure_season: int
+) -> pl.DataFrame:
+    """Same definition as build_vacated_share, for the live not-yet-played-season entry
+    point: "team in departure_season+1" comes from the live current-season roster
+    population instead of a historical shares row, since a not-yet-played season has no
+    row in `shares` to look up."""
+    cur = shares.filter(pl.col("season") == departure_season).select(
+        "gsis_id", "team", "position", *SHARE_STATS.keys()
+    )
+    next_team = future_population.select("gsis_id", pl.col("team").alias("team_next"))
+    merged = cur.join(next_team, on="gsis_id", how="left")
+    departed = merged.filter(
+        pl.col("team_next").is_null() | (pl.col("team_next") != pl.col("team"))
+    )
+    vacated = departed.group_by(["team", "position"]).agg(
+        [pl.col(s).sum().alias(f"vacated_{s}") for s in SHARE_STATS]
+    )
+    return vacated.with_columns(pl.lit(departure_season + 1).alias("season"))
+
+
 def build_snap_share(panel: pl.DataFrame, team_offensive_plays: pl.DataFrame) -> pl.DataFrame:
     """gsis_id, season, snap_share -- player's season_offense_snaps over the team's true
     offensive play count from play-by-play (src/features/team_volume.py's build_pace),

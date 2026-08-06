@@ -1,0 +1,16 @@
+# League roster requirements -- drives Step 9's replacement-level (VOR) calculation.
+# Never hardcode these in code, per CLAUDE.md's "keep league rules as configuration"
+# rule. Confirmed with the league owner 2026-08-06: standard 12-team PPR lineup, one
+# flex spot eligible for RB/WR/TE.
+
+teams: 12
+
+starters:
+  QB: 1
+  RB: 2
+  WR: 2
+  TE: 1
+
+flex:
+  count: 1
+  eligible: [RB, WR, TE]

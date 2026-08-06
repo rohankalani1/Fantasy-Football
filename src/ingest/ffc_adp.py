@@ -54,6 +54,20 @@ def pull_ffc_adp(refresh: bool = False) -> pl.DataFrame:
     return df
 
 
+def pull_ffc_adp_for_season(season: int, refresh: bool = False) -> pl.DataFrame:
+    """Live ADP for a single season outside the fixed historical SEASONS window --
+    used for Step 9's draft-board reference column. Cached separately per season
+    (ffc_adp_{season}.parquet) so a live pull for the current season never touches or
+    invalidates the historical ffc_adp.parquet cache."""
+    path = os.path.join(RAW_DIR, f"ffc_adp_{season}.parquet")
+    if os.path.exists(path) and not refresh:
+        return pl.read_parquet(path)
+    df = _pull_season(season)
+    os.makedirs(RAW_DIR, exist_ok=True)
+    df.write_parquet(path)
+    return df
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Pull and cache FFC ADP data.")
     parser.add_argument(

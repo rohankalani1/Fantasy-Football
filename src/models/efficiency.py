@@ -152,10 +152,11 @@ def fit_all_shrinkage_params(panel: pl.DataFrame) -> dict:
     return params
 
 
-def build_shrinkage_predictions(panel: pl.DataFrame, params: dict) -> pl.DataFrame:
-    """gsis_id, season, position, plus {stat}_shrunk for all 4 stats -- predicting
-    season t+1 using career-cumulative opportunity/rate as of the player's most recent
-    prior season (inclusive).
+def _apply_shrinkage(base: pl.DataFrame, career: pl.DataFrame, params: dict) -> pl.DataFrame:
+    """Shared by build_shrinkage_predictions (base = panel's own historical rows) and
+    build_future_shrinkage_predictions (base = a live not-yet-played-season roster
+    population) -- the shrinkage formula and the join_asof lookup are identical either
+    way, only which (gsis_id, season, position) rows to predict for differs.
 
     NOT a naive "season - 1" lookup: a player with a gap year (out of the league, e.g.
     injury/release, then back the following season -- verified with Hunter Renfrow, who
@@ -163,11 +164,9 @@ def build_shrinkage_predictions(panel: pl.DataFrame, params: dict) -> pl.DataFra
     season t, so an exact-match join on season+1 would silently null out (then
     zero-fill) his entire real career history right when he returns. join_asof with
     strategy="backward" instead finds the closest prior season that actually exists for
-    that player, however far back the gap goes.
+    that player, however far back the gap goes -- which is exactly what a live 2026
+    population also needs (every player's most recent real season is 2025 or earlier).
     """
-    career = build_career_cumulative(panel)
-    base = panel.select("gsis_id", "season", "position")
-
     # Both sides are genuinely sorted by (gsis_id, season) here (verified: 0/731
     # mismatches against a manual cumsum check) -- polars just can't confirm per-group
     # sortedness cheaply when a "by" key is given, hence the warning it emits.
@@ -211,6 +210,27 @@ def build_shrinkage_predictions(panel: pl.DataFrame, params: dict) -> pl.DataFra
         *[f"{stat}_career_rate" for stat in RATE_STATS],
         *unique_opp_cols,
     )
+
+
+def build_shrinkage_predictions(panel: pl.DataFrame, params: dict) -> pl.DataFrame:
+    """gsis_id, season, position, plus {stat}_shrunk for all 8 stats, for every
+    (gsis_id, season) row already in panel -- predicting season t+1 using career-
+    cumulative opportunity/rate as of the player's most recent prior season."""
+    career = build_career_cumulative(panel)
+    base = panel.select("gsis_id", "season", "position")
+    return _apply_shrinkage(base, career, params)
+
+
+def build_future_shrinkage_predictions(
+    panel: pl.DataFrame, future_population: pl.DataFrame, params: dict
+) -> pl.DataFrame:
+    """Same shrinkage predictions, for a live not-yet-played season's roster population
+    instead of panel's own rows -- every player's career-cumulative rate through their
+    most recent real season (2025 or earlier) is already knowable, exactly the
+    information this needs."""
+    career = build_career_cumulative(panel)
+    base = future_population.select("gsis_id", "season", "position")
+    return _apply_shrinkage(base, career, params)
 
 
 def score_shrinkage(panel: pl.DataFrame, predictions: pl.DataFrame) -> dict:

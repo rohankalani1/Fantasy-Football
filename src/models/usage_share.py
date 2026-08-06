@@ -30,9 +30,11 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
+from src.features.current_roster import build_future_population
 from src.features.team_volume import build_pace
 from src.features.usage_features import (
     build_ewma_prior_shares,
+    build_future_vacated_share,
     build_shares,
     build_snap_share,
     build_vacated_share,
@@ -40,7 +42,7 @@ from src.features.usage_features import (
 from src.ingest.constants import PROCESSED_DIR, RESULTS_DIR, SEASONS
 from src.ingest.pull_raw import pull_pbp
 from src.models.team_volume import assemble_training_table as build_team_volume_table
-from src.models.team_volume import fit_team_volume_model, project_historical
+from src.models.team_volume import fit_team_volume_model, project_future_season, project_historical
 
 FEATURE_COLS = [
     "ewma_target_share",
@@ -61,6 +63,16 @@ FEATURE_COLS = [
     "team_pass_rate_projected",
 ]
 CATEGORICAL_FEATURES = ["position"]
+
+# draft_round/draft_pick are legitimately null for undrafted players (~44% of the
+# panel) -- NOT missing data to drop. LightGBM handles NaN features natively (a real
+# split branch, not an error), so these two are deliberately excluded from the
+# drop_nulls gate below. Bug found and fixed here: the original drop_nulls covered
+# every FEATURE_COLS entry, which silently dropped every undrafted player from
+# training AND zeroed their predicted share at inference (verified: Austin Ekeler,
+# James Robinson, Phillip Lindsay all showed target_share_pred=0.0 for their entire
+# careers in the pre-fix output) -- a real accuracy bug, not a hypothetical.
+_REQUIRED_NON_NULL_FEATURES = [c for c in FEATURE_COLS if c not in ("position", "draft_round", "draft_pick")]
 
 TARGET_SHARE_POSITIONS = ["WR", "RB", "TE"]
 RUSH_SHARE_POSITIONS = ["RB", "QB", "WR"]
@@ -133,8 +145,17 @@ def assemble_usage_training_table(panel: pl.DataFrame, refresh: bool = False) ->
     out = out.join(snap_share, on=["gsis_id", "season"], how="left")
     out = out.join(vacated, on=["team", "position", "season"], how="left")
     out = out.join(pass_rate_proj, on=["team", "season"], how="left")
+    out = _fill_usage_feature_nulls(out)
+    return out.filter(pl.col("season").is_in(SEASONS)).sort(["season", "team", "position"])
 
-    out = out.with_columns(
+
+def _fill_usage_feature_nulls(out: pl.DataFrame) -> pl.DataFrame:
+    """team_change_flag plus the null-fill pass shared by the historical training table
+    and the live future-season table: ewma's own fill_null only covers rows that exist
+    in its output; joining it onto a wider (every QB/RB/WR/TE row) population
+    reintroduces nulls for rows absent from ewma entirely, so these need filling again
+    here too."""
+    return out.with_columns(
         pl.when(pl.col("team_t1").is_not_null())
         .then((pl.col("team") != pl.col("team_t1")).cast(pl.Int8))
         .otherwise(0)
@@ -142,9 +163,6 @@ def assemble_usage_training_table(panel: pl.DataFrame, refresh: bool = False) ->
         pl.col("ewma_target_share").fill_null(0.0),
         pl.col("ewma_rush_share").fill_null(0.0),
         pl.col("ewma_passer_share").fill_null(0.0),
-        # ewma's own fill_null only covers rows that exist in its output; joining it
-        # onto this wider (every QB/RB/WR/TE row) population reintroduces nulls for
-        # rows absent from ewma entirely, so these need filling again here too.
         pl.col("target_share_t1").fill_null(0.0),
         pl.col("rush_share_t1").fill_null(0.0),
         pl.col("passer_share_t1").fill_null(0.0),
@@ -155,7 +173,73 @@ def assemble_usage_training_table(panel: pl.DataFrame, refresh: bool = False) ->
         pl.col("vacated_rush_share").fill_null(0.0),
         pl.col("vacated_passer_share").fill_null(0.0),
     )
-    return out.filter(pl.col("season").is_in(SEASONS)).sort(["season", "team", "position"])
+
+
+def assemble_future_usage_table(
+    panel: pl.DataFrame, season: int, refresh: bool = False
+) -> pl.DataFrame:
+    """Same feature set and columns as assemble_usage_training_table, keyed to the live
+    `season` roster population instead of panel's own historical rows -- there is no
+    label column here (target_share/rush_share/passer_share for `season` don't exist
+    yet), only the inputs predict_shares() needs. Every input is either a real,
+    already-completed prior season (ewma shares, games played, snap share, all from
+    panel through season-1) or Step 3's own future-season projection (never realized
+    ground truth), matching this project's as-of-Aug-1 discipline for a live season
+    exactly the same way it already does for historical ones.
+    """
+    future_population = build_future_population(season, refresh)
+
+    shares = build_shares(panel)
+    ewma = build_ewma_prior_shares(shares).filter(pl.col("season") == season)
+    vacated = build_future_vacated_share(shares, future_population, season - 1)
+
+    pace = build_pace(pull_pbp(refresh))
+    snap_share = (
+        build_snap_share(panel, pace)
+        .with_columns((pl.col("season") + 1).alias("season"))
+        .rename({"snap_share": "snap_share_t1"})
+        .filter(pl.col("season") == season)
+    )
+
+    team_vol_table = build_team_volume_table(refresh)
+    _, team_vol_models = fit_team_volume_model(team_vol_table)
+    pass_rate_proj = project_future_season(team_vol_models, season).select(
+        "team", pl.col("pass_rate_pred").alias("team_pass_rate_projected")
+    )
+
+    base = future_population.select(
+        "gsis_id", "season", "team", "position", "draft_round", "draft_pick",
+        "years_exp", "age",
+    )
+
+    gp1 = (
+        panel.select("gsis_id", "season", "games_played")
+        .with_columns((pl.col("season") + 1).alias("season"))
+        .rename({"games_played": "games_played_t1"})
+        .filter(pl.col("season") == season)
+    )
+    gp2 = (
+        panel.select("gsis_id", "season", "games_played")
+        .with_columns((pl.col("season") + 2).alias("season"))
+        .rename({"games_played": "games_played_t2"})
+        .filter(pl.col("season") == season)
+    )
+    team_prior = (
+        panel.select("gsis_id", "season", "team")
+        .with_columns((pl.col("season") + 1).alias("season"))
+        .rename({"team": "team_t1"})
+        .filter(pl.col("season") == season)
+    )
+
+    out = base.join(ewma, on=["gsis_id", "season"], how="left")
+    out = out.join(gp1, on=["gsis_id", "season"], how="left")
+    out = out.join(gp2, on=["gsis_id", "season"], how="left")
+    out = out.join(team_prior, on=["gsis_id", "season"], how="left")
+    out = out.join(snap_share, on=["gsis_id", "season"], how="left")
+    out = out.join(vacated, on=["team", "position", "season"], how="left")
+    out = out.join(pass_rate_proj, on="team", how="left")
+    out = _fill_usage_feature_nulls(out)
+    return out.sort(["team", "position"])
 
 
 def _to_lgb_frame(df: pl.DataFrame) -> pd.DataFrame:
@@ -167,7 +251,7 @@ def _to_lgb_frame(df: pl.DataFrame) -> pd.DataFrame:
 
 def _fit_one_share_model(table: pl.DataFrame, target: str, positions: list[str]) -> tuple[dict, lgb.LGBMRegressor]:
     complete = table.filter(pl.col("position").is_in(positions)).drop_nulls(
-        [c for c in FEATURE_COLS if c != "position"] + [target]
+        _REQUIRED_NON_NULL_FEATURES + [target]
     )
     train = complete.filter(pl.col("season") <= TRAIN_MAX_SEASON)
     tune = complete.filter(pl.col("season").is_in(TUNE_SEASONS))
@@ -264,7 +348,7 @@ def predict_shares(table: pl.DataFrame, models: dict) -> pl.DataFrame:
     out = table.select("gsis_id", "season", "position")
     for target, positions in _MODEL_POSITIONS.items():
         eligible = table.filter(pl.col("position").is_in(positions)).drop_nulls(
-            [c for c in FEATURE_COLS if c != "position"]
+            _REQUIRED_NON_NULL_FEATURES
         )
         X = _to_lgb_frame(eligible)
         raw_pred = np.clip(models[target].predict(X), 0.0, 1.0)

@@ -22,7 +22,10 @@ import polars as pl
 from scipy.optimize import minimize
 from scipy.special import betaln
 
-from src.features.availability_features import build_availability_features
+from src.features.availability_features import (
+    build_availability_features,
+    build_future_availability_features,
+)
 from src.ingest.constants import PROCESSED_DIR, RESULTS_DIR, SEASONS, season_length_expr
 
 FEATURE_COLS = ["intercept", "age", "games_missed_t1", "games_missed_t2", "is_RB", "is_WR", "is_TE"]
@@ -152,6 +155,15 @@ def build_training_table(panel: pl.DataFrame) -> pl.DataFrame:
     out = feats.join(labels, on=["gsis_id", "season"], how="left")
     out = out.with_columns(season_length_expr().alias("season_length"))
     return out.filter(pl.col("season").is_in(SEASONS))
+
+
+def build_future_availability_table(panel: pl.DataFrame, future_population: pl.DataFrame) -> pl.DataFrame:
+    """Same shape as build_training_table (minus games_played/ffc_adp, which don't
+    exist yet for a not-yet-played season), ready for predict() -- age/games_missed
+    come from build_future_availability_features; season_length is 17 for any season
+    >=2021, which a live current season always is."""
+    feats = build_future_availability_features(panel, future_population)
+    return feats.with_columns(season_length_expr().alias("season_length"))
 
 
 def score(table_with_preds: pl.DataFrame) -> dict:
