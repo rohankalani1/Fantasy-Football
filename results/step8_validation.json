@@ -1,9 +1,9 @@
 {
   "2024": {
     "n_draftable_by_position": {
-      "QB": 26,
-      "RB": 60,
       "WR": 72,
+      "RB": 60,
+      "QB": 26,
       "TE": 20
     },
     "model": {
@@ -37,10 +37,10 @@
   },
   "2025": {
     "n_draftable_by_position": {
-      "TE": 26,
       "QB": 29,
+      "WR": 87,
       "RB": 64,
-      "WR": 87
+      "TE": 26
     },
     "model": {
       "QB": 0.2517241379310345,

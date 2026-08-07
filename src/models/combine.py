@@ -19,6 +19,14 @@ import polars as pl
 from src.features.current_roster import build_future_population
 from src.ingest.constants import PROCESSED_DIR, RESULTS_DIR, SEASONS, season_length_expr
 from src.models.availability import build_future_availability_table
+from src.models.calibration import (
+    CALIBRATION_TRAIN_SEASONS,
+    apply_calibration,
+    build_calibration_table,
+    fit_calibration_curve,
+    load_curve,
+    save_curve,
+)
 from src.models.availability import build_training_table as build_availability_table
 from src.models.availability import fit_availability_model
 from src.models.availability import predict as predict_availability
@@ -211,8 +219,30 @@ def main(refresh: bool = False) -> pl.DataFrame:
     panel = pl.read_parquet(os.path.join(PROCESSED_DIR, "player_season_panel.parquet"))
     predictions = assemble_component_predictions(panel, refresh)
     scoring = load_scoring_config()
-    combined = compute_projected_points(predictions, scoring)
-    combined = blend_rookie_projections(combined, panel, refresh)
+    combined_raw = compute_projected_points(predictions, scoring)
+
+    # Rookie blend runs BEFORE calibration, not after: it replaces the model's
+    # own (known-bad, CLAUDE.md-flagged) rookie predictions with a consensus-
+    # anchored estimate, so calibration -- which corrects compounding-shrinkage
+    # compression in the *model's own* veteran predictions -- fits and applies
+    # against the already-sensible post-rookie-blend population instead of
+    # partly against raw rookie noise. Tried the reverse order first: it let a
+    # handful of rookies who also ranked near the top of their position get a
+    # calibration boost before being blended, which changed their blended
+    # result and cost 2024's QB Spearman ~0.03 versus running calibration in
+    # isolation -- small, but avoidable, so the order was fixed instead of
+    # accepted.
+    combined_raw = blend_rookie_projections(combined_raw, panel, refresh)
+
+    # Fit and apply the post-hoc points calibration (see src/models/calibration.py):
+    # the raw model systematically underpredicts elite players' season points, a
+    # compounding-shrinkage effect confirmed on the 2024/2025 backtest. Fit on
+    # 2023-2024 (out-of-sample from every component), saved so main_future() can
+    # reuse the exact same curve without recomputing the whole historical fit.
+    calib_table = build_calibration_table(combined_raw, panel, refresh)
+    curve = fit_calibration_curve(calib_table, CALIBRATION_TRAIN_SEASONS)
+    save_curve(curve)
+    combined = apply_calibration(combined_raw, curve)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
     out_path = os.path.join(RESULTS_DIR, "combined_projections.parquet")
@@ -231,8 +261,16 @@ def main_future(season: int = FUTURE_SEASON, refresh: bool = False) -> pl.DataFr
     future_population = build_future_population(season, refresh)
     predictions = assemble_future_component_predictions(panel, season, refresh)
     scoring = load_scoring_config()
-    combined = compute_projected_points(predictions, scoring)
-    combined = blend_future_rookie_projections(combined, panel, future_population, season, refresh)
+    combined_raw = compute_projected_points(predictions, scoring)
+
+    # Rookie blend before calibration -- see main()'s docstring comment for why.
+    combined_raw = blend_future_rookie_projections(combined_raw, panel, future_population, season, refresh)
+
+    # Reuses the curve main() already fit on 2023-2024 and saved -- avoids
+    # recomputing the entire historical team_volume/usage_share/efficiency/
+    # availability pipeline a second time just to get the correction.
+    curve = load_curve()
+    combined = apply_calibration(combined_raw, curve)
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
     out_path = os.path.join(RESULTS_DIR, f"projections_{season}.parquet")
