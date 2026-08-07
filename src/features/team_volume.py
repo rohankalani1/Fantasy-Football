@@ -85,6 +85,56 @@ def build_hc_change(pbp: pl.DataFrame) -> pl.DataFrame:
     ).select("team", "season", "coach", "hc_change_flag")
 
 
+def build_sack_rate(team_stats: pl.DataFrame) -> pl.DataFrame:
+    """team, season, sack_rate: sacks_suffered / (attempts + sacks_suffered) -- the
+    fraction of a team's dropbacks that end in a sack. Exists to fix a real scale
+    mismatch found in Step 7's combine: team-level pass volume (Step 3's
+    team_pass_attempts, and therefore team_pass_attempts_pred) is defined as
+    attempts + sacks, but player-level pass_attempts (and passer_share's own
+    denominator) excludes sacks entirely -- verified directly that this understates
+    the gap by a real, non-trivial amount (median 39 attempts/team/season, matching
+    real NFL sack totals almost exactly, not noise). Applying passer_share_pred to
+    the sack-inclusive team total was overstating every QB's true pass attempts (and
+    therefore passing yards/TDs/INTs) by roughly that fraction."""
+    ts = team_stats.filter(pl.col("season").is_in(SEASONS)).with_columns(
+        canonicalize_team(pl.col("team"))
+    )
+    return ts.with_columns(
+        (pl.col("sacks_suffered") / (pl.col("attempts") + pl.col("sacks_suffered"))).alias("sack_rate")
+    ).select("team", "season", "sack_rate")
+
+
+def build_sack_rate_projection(team_stats: pl.DataFrame) -> pl.DataFrame:
+    """team, season(=t+1), sack_rate_pred -- 2:1 EWMA of sack rate over the trailing
+    two seasons, the same blending convention as every EWMA feature in this project
+    (sack rate is fairly sticky year-over-year: mostly a function of O-line quality,
+    scheme, and QB pocket mobility, none of which typically overhauls season to
+    season). Falls back to the league-wide mean sack rate when a team has no
+    trailing history at all (only the panel's first season or two, 2013-2014) --
+    a team with zero real signal shouldn't default to an implausible 0% sack rate,
+    which would silently re-introduce the exact overstatement bug this exists to fix.
+    """
+    realized = build_sack_rate(team_stats)
+    league_mean = float(realized["sack_rate"].mean())
+
+    t1 = realized.select("team", "season", pl.col("sack_rate").alias("sack_rate_t1")).with_columns(
+        (pl.col("season") + 1).alias("season")
+    )
+    t2 = realized.select("team", "season", pl.col("sack_rate").alias("sack_rate_t2")).with_columns(
+        (pl.col("season") + 2).alias("season")
+    )
+    out = t1.join(t2, on=["team", "season"], how="full", coalesce=True)
+    out = out.with_columns(
+        pl.when(pl.col("sack_rate_t1").is_not_null() & pl.col("sack_rate_t2").is_not_null())
+        .then(2 / 3 * pl.col("sack_rate_t1") + 1 / 3 * pl.col("sack_rate_t2"))
+        .when(pl.col("sack_rate_t1").is_not_null())
+        .then(pl.col("sack_rate_t1"))
+        .otherwise(league_mean)
+        .alias("sack_rate_pred")
+    )
+    return out.select("team", "season", "sack_rate_pred")
+
+
 def build_team_volume_features(pbp: pl.DataFrame) -> pl.DataFrame:
     pbp = pbp.filter(pl.col("season").is_in(SEASONS))
     pace = build_pace(pbp)

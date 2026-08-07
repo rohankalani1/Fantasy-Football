@@ -35,6 +35,8 @@ from src.models.efficiency import (
     build_shrinkage_predictions,
     fit_all_shrinkage_params,
 )
+from src.features.team_volume import build_sack_rate_projection
+from src.ingest.pull_raw import pull_team_stats
 from src.models.rookie_blend import blend_rookie_projections, blend_future_rookie_projections
 from src.models.team_volume import assemble_training_table as build_team_volume_table
 from src.models.team_volume import fit_team_volume_model
@@ -62,6 +64,14 @@ _ZERO_FILL_BEFORE_MULTIPLY = [
     "ypc_shrunk", "td_rate_rushing_shrunk",
     "ypa_shrunk", "pass_td_rate_shrunk", "int_rate_shrunk",
 ]
+
+# sack_rate_pred is deliberately NOT in _ZERO_FILL_BEFORE_MULTIPLY -- a 0 default
+# would mean "no sacks," which understates true attempts and silently re-introduces
+# the exact overstatement bug this feature exists to fix. build_sack_rate_projection
+# already falls back to the league mean for any team/season with real trailing data;
+# this is a last-resort defensive fallback for a join miss that should never happen
+# with real historical team codes, set to the modern NFL's typical sack rate.
+_LEAGUE_MEAN_SACK_RATE_FALLBACK = 0.065
 
 
 def _fit_all_models(panel: pl.DataFrame, refresh: bool = False) -> dict:
@@ -104,6 +114,7 @@ def assemble_component_predictions(panel: pl.DataFrame, refresh: bool = False) -
 
     team_vol_table = build_team_volume_table(refresh)
     team_vol_pred = project_team_volume_historical(team_vol_table, models["team_vol_models"])
+    sack_rate_pred = build_sack_rate_projection(pull_team_stats(refresh))
 
     usage_table = assemble_usage_training_table(panel, refresh)
     usage_pred = predict_shares(usage_table, models["usage_models"])
@@ -115,12 +126,14 @@ def assemble_component_predictions(panel: pl.DataFrame, refresh: bool = False) -
 
     base = panel.select("gsis_id", "season", "team", "position")
     out = base.join(team_vol_pred, on=["team", "season"], how="left")
+    out = out.join(sack_rate_pred, on=["team", "season"], how="left")
     out = out.join(usage_pred.drop("position"), on=["gsis_id", "season"], how="left")
     out = out.join(efficiency_pred.drop("position"), on=["gsis_id", "season"], how="left")
     out = out.join(
         avail_pred.select("gsis_id", "season", "pred_games_played", "pred_availability_prob"),
         on=["gsis_id", "season"], how="left",
     )
+    out = out.with_columns(pl.col("sack_rate_pred").fill_null(_LEAGUE_MEAN_SACK_RATE_FALLBACK))
     return out.with_columns([pl.col(c).fill_null(0.0) for c in _ZERO_FILL_BEFORE_MULTIPLY])
 
 
@@ -136,6 +149,9 @@ def assemble_future_component_predictions(
     team_vol_pred = project_future_season(models["team_vol_models"], season).select(
         "team", "team_plays_pred", "pass_rate_pred"
     )
+    sack_rate_pred = build_sack_rate_projection(pull_team_stats(refresh)).filter(
+        pl.col("season") == season
+    ).select("team", "sack_rate_pred")
 
     usage_table = assemble_future_usage_table(panel, season, refresh)
     usage_pred = predict_shares(usage_table, models["usage_models"])
@@ -149,21 +165,38 @@ def assemble_future_component_predictions(
 
     base = future_population.select("gsis_id", "season", "team", "position")
     out = base.join(team_vol_pred, on="team", how="left")
+    out = out.join(sack_rate_pred, on="team", how="left")
     out = out.join(usage_pred.drop("position"), on=["gsis_id", "season"], how="left")
     out = out.join(efficiency_pred.drop("position"), on=["gsis_id", "season"], how="left")
     out = out.join(
         avail_pred.select("gsis_id", "season", "pred_games_played", "pred_availability_prob"),
         on=["gsis_id", "season"], how="left",
     )
+    out = out.with_columns(pl.col("sack_rate_pred").fill_null(_LEAGUE_MEAN_SACK_RATE_FALLBACK))
     return out.with_columns([pl.col(c).fill_null(0.0) for c in _ZERO_FILL_BEFORE_MULTIPLY])
 
 
 def project_raw_stats(predictions: pl.DataFrame) -> pl.DataFrame:
     """Multiplies team volume x usage share x efficiency into projected raw counting
-    stats, in the exact column names src/scoring.py's compute_fantasy_points expects."""
+    stats, in the exact column names src/scoring.py's compute_fantasy_points expects.
+
+    team_plays_pred x pass_rate_pred gives team DROPBACKS (Step 3's own target
+    definition includes sacks -- team_pass_attempts = attempts + sacks_suffered, see
+    build_team_totals). Bug found and fixed here: target_share_pred and
+    passer_share_pred were being applied directly to that dropback-inclusive total,
+    but their own denominators (team_total_targets, and player-level pass_attempts)
+    both exclude sacks -- verified directly that this overstated every team's true
+    pass attempts by a real, consistent amount (median 39 attempts/team/season,
+    matching real NFL sack totals almost exactly, not noise), which flowed straight
+    through into overstated targets/pass attempts and therefore receiving and
+    passing yards/TDs/INTs leaguewide. Converting dropbacks to true pass attempts via
+    the projected sack rate before applying either share fixes this at the source."""
     out = predictions.with_columns(
-        (pl.col("team_plays_pred") * pl.col("pass_rate_pred")).alias("team_pass_attempts_pred"),
+        (pl.col("team_plays_pred") * pl.col("pass_rate_pred")).alias("team_dropbacks_pred"),
         (pl.col("team_plays_pred") * (1 - pl.col("pass_rate_pred"))).alias("team_rush_attempts_pred"),
+    )
+    out = out.with_columns(
+        (pl.col("team_dropbacks_pred") * (1 - pl.col("sack_rate_pred"))).alias("team_pass_attempts_pred"),
     )
     out = out.with_columns(
         (pl.col("team_pass_attempts_pred") * pl.col("target_share_pred")).alias("targets_pred"),

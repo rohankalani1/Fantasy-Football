@@ -31,6 +31,7 @@ import pandas as pd
 import polars as pl
 
 from src.features.current_roster import build_future_population
+from src.features.redzone_features import build_career_adot, build_ewma_redzone_shares, build_redzone_shares
 from src.features.team_volume import build_pace
 from src.features.usage_features import (
     build_ewma_prior_shares,
@@ -61,6 +62,9 @@ FEATURE_COLS = [
     "team_change_flag",
     "position",
     "team_pass_rate_projected",
+    "ewma_red_zone_target_share",
+    "ewma_red_zone_rush_share",
+    "career_adot",
 ]
 CATEGORICAL_FEATURES = ["position"]
 
@@ -72,7 +76,13 @@ CATEGORICAL_FEATURES = ["position"]
 # training AND zeroed their predicted share at inference (verified: Austin Ekeler,
 # James Robinson, Phillip Lindsay all showed target_share_pred=0.0 for their entire
 # careers in the pre-fix output) -- a real accuracy bug, not a hypothetical.
-_REQUIRED_NON_NULL_FEATURES = [c for c in FEATURE_COLS if c not in ("position", "draft_round", "draft_pick")]
+#
+# career_adot is excluded for the same reason: it's legitimately null for anyone
+# with no career targets (most RBs/QBs, and true rookies) -- not a missing-data
+# problem, a real "this player has never run a pass route" signal.
+_REQUIRED_NON_NULL_FEATURES = [
+    c for c in FEATURE_COLS if c not in ("position", "draft_round", "draft_pick", "career_adot")
+]
 
 TARGET_SHARE_POSITIONS = ["WR", "RB", "TE"]
 RUSH_SHARE_POSITIONS = ["RB", "QB", "WR"]
@@ -100,11 +110,18 @@ def assemble_usage_training_table(panel: pl.DataFrame, refresh: bool = False) ->
     ewma = build_ewma_prior_shares(shares)
     vacated = build_vacated_share(shares)
 
-    pace = build_pace(pull_pbp(refresh))
+    pbp = pull_pbp(refresh)
+    pace = build_pace(pbp)
     snap_share = (
         build_snap_share(panel, pace)
         .with_columns((pl.col("season") + 1).alias("season"))
         .rename({"snap_share": "snap_share_t1"})
+    )
+    ewma_redzone = build_ewma_redzone_shares(build_redzone_shares(panel, pbp))
+    career_adot = (
+        build_career_adot(pbp)
+        .with_columns((pl.col("season") + 1).alias("season"))
+        .select("gsis_id", "season", "career_adot")
     )
 
     team_vol_table = build_team_volume_table(refresh)
@@ -145,6 +162,8 @@ def assemble_usage_training_table(panel: pl.DataFrame, refresh: bool = False) ->
     out = out.join(snap_share, on=["gsis_id", "season"], how="left")
     out = out.join(vacated, on=["team", "position", "season"], how="left")
     out = out.join(pass_rate_proj, on=["team", "season"], how="left")
+    out = out.join(ewma_redzone, on=["gsis_id", "season"], how="left")
+    out = out.join(career_adot, on=["gsis_id", "season"], how="left")
     out = _fill_usage_feature_nulls(out)
     return out.filter(pl.col("season").is_in(SEASONS)).sort(["season", "team", "position"])
 
@@ -172,6 +191,9 @@ def _fill_usage_feature_nulls(out: pl.DataFrame) -> pl.DataFrame:
         pl.col("vacated_target_share").fill_null(0.0),
         pl.col("vacated_rush_share").fill_null(0.0),
         pl.col("vacated_passer_share").fill_null(0.0),
+        # career_adot deliberately NOT filled -- see _REQUIRED_NON_NULL_FEATURES.
+        pl.col("ewma_red_zone_target_share").fill_null(0.0),
+        pl.col("ewma_red_zone_rush_share").fill_null(0.0),
     )
 
 
@@ -193,12 +215,22 @@ def assemble_future_usage_table(
     ewma = build_ewma_prior_shares(shares).filter(pl.col("season") == season)
     vacated = build_future_vacated_share(shares, future_population, season - 1)
 
-    pace = build_pace(pull_pbp(refresh))
+    pbp = pull_pbp(refresh)
+    pace = build_pace(pbp)
     snap_share = (
         build_snap_share(panel, pace)
         .with_columns((pl.col("season") + 1).alias("season"))
         .rename({"snap_share": "snap_share_t1"})
         .filter(pl.col("season") == season)
+    )
+    ewma_redzone = build_ewma_redzone_shares(build_redzone_shares(panel, pbp)).filter(
+        pl.col("season") == season
+    )
+    career_adot = (
+        build_career_adot(pbp)
+        .with_columns((pl.col("season") + 1).alias("season"))
+        .filter(pl.col("season") == season)
+        .select("gsis_id", "season", "career_adot")
     )
 
     team_vol_table = build_team_volume_table(refresh)
@@ -238,6 +270,8 @@ def assemble_future_usage_table(
     out = out.join(snap_share, on=["gsis_id", "season"], how="left")
     out = out.join(vacated, on=["team", "position", "season"], how="left")
     out = out.join(pass_rate_proj, on="team", how="left")
+    out = out.join(ewma_redzone, on=["gsis_id", "season"], how="left")
+    out = out.join(career_adot, on=["gsis_id", "season"], how="left")
     out = _fill_usage_feature_nulls(out)
     return out.sort(["team", "position"])
 
