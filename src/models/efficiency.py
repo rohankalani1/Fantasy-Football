@@ -179,9 +179,23 @@ def _apply_shrinkage(base: pl.DataFrame, career: pl.DataFrame, params: dict) -> 
             career_shifted, by="gsis_id", on="season", strategy="backward"
         )
 
+    # Bug found and fixed here: the QB-specific career columns (added in Step 7 for
+    # ypa/pass_td_rate/int_rate) were missing from this fill-null list, which the 6
+    # receiving/rushing columns above already had. A player's very first panel row
+    # (every player's 2013 season, or a true rookie QB's debut) has no prior season
+    # for join_asof to find, so career_pass_attempts etc. come back null, not 0 --
+    # the shrinkage formula then propagates that null all the way to {stat}_shrunk
+    # (null * anything is null), which src/models/combine.py's zero-fill silently
+    # turns into a *0* prediction instead of the intended full shrinkage to the
+    # prior mean. Verified directly: 361/1546 historical QB rows (23%) had null
+    # ypa_shrunk before this fix. Not currently visible in shipped output because
+    # rookie_blend.py happens to override every affected rookie QB regardless, but
+    # that's a coincidence of rookie_blend's own detection logic, not a fix for this.
     for c in [
         "career_targets", "career_receiving_yards", "career_receiving_tds",
         "career_carries", "career_rushing_yards", "career_rushing_tds",
+        "career_pass_attempts", "career_passing_yards", "career_passing_tds",
+        "career_pass_interceptions",
     ]:
         out = out.with_columns(pl.col(c).fill_null(0))
 
