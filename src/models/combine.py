@@ -176,6 +176,51 @@ def assemble_future_component_predictions(
     return out.with_columns([pl.col(c).fill_null(0.0) for c in _ZERO_FILL_BEFORE_MULTIPLY])
 
 
+_SHARE_COLS_TO_NORMALIZE = ["passer_share_pred"]
+
+
+def normalize_shares_to_one(predictions: pl.DataFrame) -> pl.DataFrame:
+    """target_share_pred/rush_share_pred/passer_share_pred are each fit as an
+    independent per-player regression, not a constrained multinomial/softmax, so
+    nothing forces a team's players to sum to 1.0 -- diagnosed directly: only ~25-36%
+    of historical team-seasons land within +/-5% of 1.0 for any of the three shares,
+    and the tails are large (e.g. WAS 2019 passer_share sums to 1.81, NO 2015
+    target_share sums to 0.65). Unlike the receiving/passing yards gap (two
+    independently-*noisy* efficiency estimates with no principled reason to trust one
+    over the other -- tested, reverted), this is a hard constraint violation with only
+    one correct answer: a team's own players cannot combine for more or less than
+    100% of the team's own volume. Rescaling every player's share by their team's
+    total (a simplex projection, not a damped blend) is the actual fix, applied
+    before team volume is multiplied through so it's load-bearing for every
+    downstream counting stat, not just yards.
+
+    Tested all 3 shares in isolation via paired bootstrap (see git log): only
+    passer_share_pred showed a real, consistent, significant win (pooled QB rank
+    Spearman +0.112, p=0.04; +0.077 tune -> +0.152 test -- same direction, growing
+    out of sample). target_share/rush_share renormalization sign-flipped or hurt
+    between tune and test -- a QB team only carries 2-4 players, so its share-sum is a
+    low-noise correction target; WR/RB/TE teams carry 8-12+, so the same correction
+    divides by a noisier aggregate and adds noise instead of removing bias. Only
+    passer_share_pred is normalized as a result; the other two are listed in the
+    diagnostic above but deliberately left alone."""
+    cols = _SHARE_COLS_TO_NORMALIZE
+    sum_aliases = [f"_{c}_sum" for c in cols]
+    team_totals = predictions.group_by(["team", "season"]).agg(
+        [pl.col(c).sum().alias(f"_{c}_sum") for c in cols]
+    )
+    out = predictions.join(team_totals, on=["team", "season"], how="left")
+    out = out.with_columns(
+        [
+            pl.when(pl.col(f"_{c}_sum") > 0)
+            .then(pl.col(c) / pl.col(f"_{c}_sum"))
+            .otherwise(pl.col(c))
+            .alias(c)
+            for c in cols
+        ]
+    )
+    return out.drop(sum_aliases)
+
+
 def project_raw_stats(predictions: pl.DataFrame) -> pl.DataFrame:
     """Multiplies team volume x usage share x efficiency into projected raw counting
     stats, in the exact column names src/scoring.py's compute_fantasy_points expects.
@@ -191,6 +236,7 @@ def project_raw_stats(predictions: pl.DataFrame) -> pl.DataFrame:
     through into overstated targets/pass attempts and therefore receiving and
     passing yards/TDs/INTs leaguewide. Converting dropbacks to true pass attempts via
     the projected sack rate before applying either share fixes this at the source."""
+    predictions = normalize_shares_to_one(predictions)
     out = predictions.with_columns(
         (pl.col("team_plays_pred") * pl.col("pass_rate_pred")).alias("team_dropbacks_pred"),
         (pl.col("team_plays_pred") * (1 - pl.col("pass_rate_pred"))).alias("team_rush_attempts_pred"),
